@@ -1,0 +1,16 @@
+---
+- name: Restart devops
+  community.docker.docker_compose_v2:
+    project_src: /var/services/devops
+    state: restarted
+  listen: Restart devops
+
+- name: Reload Caddy
+  community.docker.docker_container_exec:
+    container: caddy
+    command: caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+  delegate_to: control-core
+  register: reload_result
+  failed_when: false
+  changed_when: reload_result.rc == 0
+  listen: Reload Caddy

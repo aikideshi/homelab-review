@@ -1,0 +1,32 @@
+# roles/seafile/templates/seahub_settings.py.j2 - fixed
+SECRET_KEY = "{{ seafile_secret_key }}"
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.mysql',
+        'NAME': 'seahub_db',
+        'USER': 'seafile',
+        'PASSWORD': "{{ seafile_mysql_db_password }}",
+        'HOST': 'db',
+        'PORT': '3306',
+    }
+}
+
+FILE_SERVER_ROOT = 'https://seafile.h-and-i.com/seafhttp'
+ENABLE_OAUTH = True
+OAUTH_CREATE_UNKNOWN_USER = True
+OAUTH_ACTIVATE_USER_AFTER_CREATION = True
+OAUTH_CLIENT_ID = "{{ seafile_oauth_client_id }}"
+OAUTH_CLIENT_SECRET = "{{ seafile_oauth_client_secret }}"
+OAUTH_REDIRECT_URL = "https://seafile.h-and-i.com/oauth/callback/"
+OAUTH_PROVIDER = "authentik"
+OAUTH_PROVIDER_DOMAIN = "{{ authentik_url }}"
+OAUTH_AUTHORIZATION_URL = "{{ authentik_url }}/application/o/authorize/"
+OAUTH_TOKEN_URL = "{{ authentik_url }}/application/o/token/"
+OAUTH_USER_INFO_URL = "{{ authentik_url }}/application/o/userinfo/"
+OAUTH_SCOPE = ["openid", "profile", "email"]
+OAUTH_ATTRIBUTE_MAP = {
+    "email": (True, "email"),
+    "name": (False, "name"),
+    "contact_email": (False, "email"),
+}

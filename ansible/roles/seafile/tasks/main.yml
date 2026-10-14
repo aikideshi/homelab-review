@@ -1,0 +1,63 @@
+---
+- name: Load SOPS secrets (global + seafile)
+  set_fact:
+    sops_env_content: "{{ lookup('community.sops.sops', global_sops_env) + '\n' + lookup('community.sops.sops', sops_env_file) }}"
+  no_log: true
+  tags: [config]
+
+- name: Parse env into vars
+  set_fact:
+    "{{ item.split('=')[0] | lower }}": "{{ item.split('=',1)[1] }}"
+  loop: "{{ sops_env_content.splitlines() | select('match','^[^#].*=') | list }}"
+  no_log: true
+  tags: [config]
+
+- name: Ensure dirs
+  file: path={{ item }} state=directory mode=0755
+  loop:
+    - "{{ service_root }}"
+    - "{{ seafile_data_root }}/seafile/conf"
+  tags: [config]
+
+- name: Deploy.env from SOPS
+  copy:
+    content: "{{ lookup('community.sops.sops', sops_env_file) }}"
+    dest: "{{ service_root }}/.env"
+    mode: "0600"
+  no_log: true
+  notify: Restart Seafile
+  tags: [config]
+
+- name: Deploy seahub_settings.py
+  template:
+    src: seahub_settings.py.j2
+    dest: "{{ seafile_data_root }}/seafile/conf/seahub_settings.py"
+    mode: "0644"
+  notify: Restart Seafile
+  tags: [config]
+
+- name: Deploy compose.yml
+  template:
+    src: compose.yml.j2
+    dest: "{{ service_root }}/compose.yml"
+    mode: "0644"
+  notify: Restart Seafile
+  tags: [config, deploy]
+
+- name: Start Seafile stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ service_root }}"
+    env_files: ["{{ service_root }}/.env"]
+    state: present
+    pull: always
+    remove_orphans: true
+  tags: [deploy]
+
+- name: Push Caddy snippet to core
+  template:
+    src: caddy.conf.j2
+    dest: "/var/services/core/caddy.d/seafile.conf"
+    mode: "0644"
+  delegate_to: control-core
+  notify: Reload Caddy
+  tags: [config]

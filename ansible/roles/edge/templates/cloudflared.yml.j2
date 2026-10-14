@@ -1,0 +1,10 @@
+tunnel: ${TUNNEL_UUID}
+credentials-file: /etc/cloudflared/credentials.json
+protocol: http2
+origin-request:
+  noTLSVerify: true
+  connectTimeout: 30s
+ingress:
+    - hostname: "*.h-and-i.com"
+    service: {{ caddy_upstream }}
+    - service: http_status:404

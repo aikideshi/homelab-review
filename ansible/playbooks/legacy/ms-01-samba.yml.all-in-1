@@ -1,0 +1,85 @@
+---
+- name: Provision Samba on ms-01 (LXC 178)
+  hosts: samba
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - "{{ playbook_dir }}/../secrets/178-samba.sops.yaml"
+
+  tasks:
+    # --- SSH keys (public keys from repo, plaintext) ---
+    - name: Deploy authorized keys for root
+      ansible.posix.authorized_key:
+        user: root
+        key: "{{ lookup('file', item) }}"
+        state: present
+      loop: "{{ lookup('fileglob', playbook_dir + '/../files/ssh_keys/*.pub', wantlist=true) }}"
+
+    # --- Bootstrap (runs once per container lifetime) ---
+    - name: Check bootstrap marker
+      ansible.builtin.stat:
+        path: /etc/homelab-bootstrapped
+      register: bootstrap_marker
+
+    - name: Bootstrap (base packages + locale)
+      when: not bootstrap_marker.stat.exists
+      block:
+        - apt:
+            update_cache: yes
+            cache_valid_time: 86400
+        - apt:
+            name: [samba, samba-common-bin, cifs-utils, acl, attr, locales]
+            state: present
+        - locale_gen:
+            name: en_AU.UTF-8
+            state: present
+        - file:
+            path: /etc/homelab-bootstrapped
+            state: touch
+            mode: "0644"
+
+    # --- Linux user (Samba uses this as force user) ---
+    - name: Ensure homerong user exists
+      ansible.builtin.user:
+        name: homerong
+        shell: /usr/sbin/nologin
+        create_home: false
+        state: present
+
+    # --- Samba user + password (idempotent via pdbedit check) ---
+    - name: Check if Samba user exists
+      ansible.builtin.command: "pdbedit --user=homerong"
+      register: samba_user_check
+      failed_when: false
+      changed_when: false
+
+    - name: Create Samba user and set password
+      ansible.builtin.shell: |
+        echo -e "{{ samba_homerong_password }}\n{{ samba_homerong_password }}" | smbpasswd -s -a homerong
+      when: samba_user_check.rc != 0
+      no_log: true
+      changed_when: true
+
+    # --- smb.conf (template renders from host_vars) ---
+    - name: Deploy smb.conf
+      template:
+        src: "{{ playbook_dir }}/../templates/smb.conf.j2"
+        dest: /etc/samba/smb.conf
+        mode: "0644"
+        validate: "testparm -s %s"
+      notify: Reload samba
+
+    # --- Services ---
+    - name: Ensure Samba enabled and running
+      systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop: [smbd, nmbd]
+
+  handlers:
+    - name: Reload samba
+      systemd:
+        name: smbd
+        state: reloaded

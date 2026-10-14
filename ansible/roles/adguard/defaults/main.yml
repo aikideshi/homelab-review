@@ -1,0 +1,3 @@
+---
+adguard_config: /etc/AdGuardHome/config.yaml
+adguard_desired_rewrites: {}

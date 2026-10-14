@@ -1,0 +1,12 @@
+---
+- name: Restart Seafile
+  community.docker.docker_compose_v2:
+    project_src: "{{ service_root }}"
+    state: restarted
+
+- name: Reload Caddy
+  community.docker.docker_compose_v2:
+    project_src: /var/services/core
+    services: [caddy]
+    state: restarted
+  delegate_to: control-core

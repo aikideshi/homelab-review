@@ -1,0 +1,46 @@
+---
+- name: Build AdGuard rewrites from all Caddy templates
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Load SOPS secrets
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../../secrets/global.sops.env"
+      no_log: true
+    - name: Extract FLINT2 vars
+      set_fact:
+        flint2_host: "{{ lookup('env','FLINT2_HOST') | default('192.168.8.1', true) }}"
+        flint2_password: "{{ lookup('env','FLINT2_PASSWORD') | default(lookup('env','ADGUARD_PASSWORD'), true) }}"
+        caddy_ip: "{{ lookup('env','CADDY_IP') | default('192.168.8.100', true) }}"
+      no_log: true
+
+- name: Build rewrites from Caddy
+  hosts: control-core
+  become: true
+  gather_facts: false
+  vars:
+    _caddy_ip: "192.168.8.100"
+  tasks:
+    - find:
+        paths: /var/services/core/caddy.d
+        patterns: "*.conf"
+      register: caddy_confs
+    - shell: grep -hEo '[a-z0-9-]+\.h-and-i\.com' {{ item.path }} | head -n1
+      loop: "{{ caddy_confs.files }}"
+      register: caddy_domains_raw
+      changed_when: false
+    - set_fact:
+        _domains: "{{ caddy_domains_raw.results | map(attribute='stdout') | select | unique | list }}"
+    - set_fact:
+        auto_rewrites: "{{ dict(_domains | zip( (_domains | length * [_caddy_ip]) ) ) }}"
+    - debug: var=auto_rewrites
+
+- name: Configure AdGuard rewrites on Flint2
+  hosts: flint2
+  gather_facts: true
+  tasks:
+    - include_role:
+        name: adguard
+      vars:
+        adguard_desired_rewrites: "{{ hostvars['control-core']['auto_rewrites'] }}"

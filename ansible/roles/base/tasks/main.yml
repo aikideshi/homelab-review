@@ -1,0 +1,89 @@
+---
+# --- SSH keys (idempotent, runs every time) ---
+- name: Deploy authorized keys for root
+  ansible.posix.authorized_key:
+    user: root
+    key: "{{ lookup('file', item) }}"
+    state: present
+  loop: "{{ lookup('fileglob', playbook_dir + '/../files/ssh_keys/*.pub', wantlist=true) }}"
+
+# ALWAYS run - not behind marker
+- name: Set timezone
+  community.general.timezone:
+    name: "{{ timezone | default('Australia/Sydney') }}"
+
+- name: Install locale support
+  apt: name=locales state=present
+
+- name: Generate en_AU.UTF-8 locale
+  community.general.locale_gen:
+    name: en_AU.UTF-8
+    state: present
+
+# --- Bootstrap marker ---
+- name: Check bootstrap marker
+  ansible.builtin.stat:
+    path: /etc/homelab-bootstrapped
+  register: bootstrap_marker
+
+# --- One-time bootstrap ---
+- name: Bootstrap — timezone, upgrade, base packages, locale
+  when: not bootstrap_marker.stat.exists
+  block:
+
+    - name: Update apt cache & upgrade
+      ansible.builtin.apt:
+        update_cache: yes
+        upgrade: dist
+        cache_valid_time: 3600
+      register: apt_update
+      retries: 3
+      until: apt_update is succeeded
+
+    - name: Install base packages
+      ansible.builtin.apt:
+        name:
+          - hx
+          - git
+          - curl
+          - rsync
+          - tmux
+          - ca-certificates
+          - gnupg
+          - lsb-release
+          - locales
+        state: present
+
+    - name: Mark bootstrap complete
+      ansible.builtin.file:
+        path: /etc/homelab-bootstrapped
+        state: touch
+        mode: "0644"
+
+- name: Ensure helix config dir exists for root
+  file:
+    path: /root/.config/helix
+    state: directory
+    mode: "0700"
+
+- name: Deploy helix config - dark theme + visible cursor
+  copy:
+    dest: /root/.config/helix/config.toml
+    mode: "0644"
+    content: |
+      theme = "catppuccin_mocha"
+      # Alternative: tokyonight or dracula - both have high contrast.
+      [editor]
+      line-number = "relative"
+      cursorline = true
+      color-modes = true
+      true-color = true
+
+      [editor.cursor-shape]
+      normal = "block"
+      insert = "bar"
+      select = "underline"
+
+      [editor.whitespace.render]
+      space = "none"
+      tab = "all"

@@ -1,0 +1,10 @@
+# === FOR PUBLIC REVIEW - NO SECRETS ===
+secrets/
+**/*.sops.env
+**/*.sops.json
+*.tfvars
+*.tfstate*
+.terraform/
+*.key
+*.env
+!*.env.example

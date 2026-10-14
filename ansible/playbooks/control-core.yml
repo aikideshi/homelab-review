@@ -1,0 +1,62 @@
+---
+- name: PHASE 01 — Provision control-core (100)
+  hosts: control-core
+  become: true
+  gather_facts: true
+  vars:
+    service_root: /var/services/core
+  pre_tasks:
+    - community.general.timezone:
+        name: "{{ timezone | default('Australia/Sydney') }}"
+  roles:
+    - base
+    - docker
+    - core
+  post_tasks:
+    - name: Show caddy fragments
+      ansible.builtin.command: ls -l /var/services/core/caddy.d/
+      changed_when: false
+      register: caddy_ls
+    - debug:
+        var: caddy_ls.stdout_lines
+
+- name: Build AdGuard rewrites from Caddy.conf
+  hosts: control-core
+  become: true
+  gather_facts: false
+  tags: [adguard, always]
+  vars:
+    _caddy_ip: "192.168.8.100"
+  tasks:
+    - name: Find caddy.d confs
+      ansible.builtin.find:
+        paths: /var/services/core/caddy.d
+        patterns: "*.conf"
+      register: caddy_confs
+    - name: Extract domains
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -hEo '[a-z0-9-]+\.h-and-i\.com' {{ item.path }} | head -n1
+      loop: "{{ caddy_confs.files }}"
+      register: caddy_domains_raw
+      changed_when: false
+    - name: Build rewrites dict
+      ansible.builtin.set_fact:
+        _domains: "{{ caddy_domains_raw.results | map(attribute='stdout') | select | unique | list }}"
+    - name: Create auto_rewrites
+      ansible.builtin.set_fact:
+        auto_rewrites: "{{ dict(_domains | zip( (_domains | length * [_caddy_ip]) ) ) }}"
+    - name: Debug rewrites
+      ansible.builtin.debug:
+        var: auto_rewrites
+
+- name: Configure AdGuard rewrites on Flint2
+  hosts: flint2:&all
+  gather_facts: true
+  tags: [adguard, always]
+  tasks:
+    - name: Apply rewrites
+      ansible.builtin.include_role:
+        name: adguard
+      vars:
+        adguard_desired_rewrites: "{{ hostvars['control-core']['auto_rewrites'] }}"

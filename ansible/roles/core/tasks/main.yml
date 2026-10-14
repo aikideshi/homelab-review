@@ -1,0 +1,57 @@
+---
+- name: Load SOPS secrets as Ansible facts
+  set_fact:
+    sops_env_content: "{{ lookup('community.sops.sops', global_sops_env) + '\n' + lookup('community.sops.sops', sops_env_file) }}"
+
+- name: Parse env into vars
+  set_fact:
+    "{{ item.split('=')[0] | lower }}": "{{ item.split('=',1)[1] }}"
+  loop: "{{ sops_env_content.splitlines() | select('match','^[^#].*=') | list }}"
+  no_log: true
+
+- name: Ensure dirs
+  ansible.builtin.file:
+    path: "{{ service_root }}/{{ item }}"
+    state: directory
+    mode: "0755"
+  loop:
+    - caddy.d
+    - data/caddy/data
+    - data/caddy/config
+    - data/authentik-postgres
+    - data/authentik-redis
+    - data/authentik/media
+    - data/authentik/templates
+    - data/authentik/certs
+
+- name: Deploy.env
+  ansible.builtin.copy:
+    content: "{{ sops_env_content }}"
+    dest: "{{ service_root }}/.env"
+    mode: "0600"
+  no_log: true
+
+- name: Template compose.yml
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: "{{ service_root }}/compose.yml"
+    mode: "0644"
+
+- name: Template Caddyfile
+  ansible.builtin.template:
+    src: Caddyfile.j2
+    dest: "{{ service_root }}/Caddyfile"
+    mode: "0644"
+
+- name: Start core stack
+  community.docker.docker_compose_v2:
+    project_src: "{{ service_root }}"
+    env_files: ["{{ service_root }}/.env"]
+    state: present
+    pull: always
+    remove_orphans: true
+
+- name: Remove old devops.conf duplicate
+  ansible.builtin.file:
+    path: "{{ service_root }}/caddy.d/devops.conf"
+    state: absent

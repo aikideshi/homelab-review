@@ -1,0 +1,10 @@
+{
+  "log-driver": "journald",
+  "log-opts": { "tag": "{{ "{{.Name}}/{{.ID}}" }}" },
+  "storage-driver": "overlay2",
+  "live-restore": true,
+  "userland-proxy": false,
+  "dns": ["192.168.8.1", "1.1.1.1"]{% if docker_registry_mirrors is defined %},
+  "registry-mirrors": {{ docker_registry_mirrors | to_json }}{% endif %}{% if docker_insecure_registries is defined %},
+  "insecure-registries": {{ docker_insecure_registries | to_json }}{% endif %}
+}

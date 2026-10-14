@@ -1,0 +1,276 @@
+---
+- name: PHASE 03 — Provision devops & Forgejo/Code/Semaphore/Termix
+  hosts: control-devops
+  gather_facts: true
+  become: true
+  vars:
+    service_name: 101-devops
+    service_root: "/var/services/{{ service_name }}"
+    env_files_root: "{{ playbook_dir }}/../../secrets"
+    sops_env_file: "{{ env_files_root }}/101-devops.sops.env"
+
+  pre_tasks:
+    - name: Set timezone
+      timezone:
+        name: "{{ timezone | default('Australia/Sydney') }}"
+
+    - name: Update apt & upgrade
+      apt:
+        update_cache: yes
+        upgrade: dist
+        cache_valid_time: 3600
+      register: apt_update
+      retries: 3
+      until: apt_update is succeeded
+
+    - name: Install base packages
+      apt:
+        name:
+          - hx
+          - git
+          - curl
+          - rsync
+          - tmux
+          - ca-certificates
+          - gnupg
+          - lsb-release
+          - locales
+        state: present
+
+    - name: Generate locale
+      locale_gen:
+        name: en_AU.UTF-8
+        state: present
+
+  tasks:
+    ###########################################################################
+    # Docker — Idempotent Pattern
+    ###########################################################################
+    - name: Install Docker prerequisites
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - fuse-overlayfs
+          - uidmap
+          - dbus
+          - udisks2
+        state: present
+
+    - name: Ensure keyrings dir
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Remove old Docker sources
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/docker.sources
+        - /etc/apt/sources.list.d/docker.list
+
+    - name: Add Docker GPG key
+      shell: |
+        curl -fsSL https://download.docker.com/linux/debian/gpg \
+          | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+
+    # ✅ FIX: Use 'copy' instead of 'shell' for true idempotency (no more false 'changed')
+#    - name: Add Docker repo
+#      copy:
+#        content: "deb [arch={{ ansible_architecture }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable\n"
+#        dest: /etc/apt/sources.list.d/docker.list
+#        mode: "0644"
+
+    - name: Add Docker repo
+      copy:
+        content: "deb [arch={{ ansible_facts.architecture }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian {{ ansible_facts.distribution_release }} stable\n"
+        dest: /etc/apt/sources.list.d/docker.list
+        mode: "0644"
+
+    - name: Install Docker & Compose
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+        # ✅ FIX: Removed update_cache: yes (already done in pre_tasks)
+
+    - name: Configure daemon.json
+      copy:
+        content: |
+          {
+            "log-driver": "journald",
+            "storage-driver": "overlay2",
+            "live-restore": true,
+            "userland-proxy": false,
+            "dns": ["1.1.1.1", "8.8.8.8"]
+          }
+        dest: /etc/docker/daemon.json
+        mode: "0644"
+
+    - name: Enable & start Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    ###########################################################################
+    # Service Env & Dirs
+    ###########################################################################
+    - name: Create service root
+      file:
+        path: "{{ service_root }}"
+        state: directory
+        mode: "0700"
+        owner: root
+        group: root
+
+    ###########################################################################
+    # Secrets — Merge Global and Stack-Specific SOPS
+    ###########################################################################
+    - name: Deploy merged .env
+      copy:
+        content: |
+          # --- Global Environment Variables ---
+          {{ lookup('community.sops.sops', playbook_dir + '/../../secrets/global.sops.env', rstrip=false) }}
+
+          # --- Stack-Specific Secrets ---
+          {{ lookup('community.sops.sops', sops_env_file, rstrip=false) }}
+        dest: "{{ service_root }}/.env"
+        mode: "0600"
+        owner: root
+        group: root
+      no_log: true
+
+#    - name: Deploy DevOps .env file
+#      template:
+#        src: "{{ playbook_dir }}/templates/devops-env.j2"
+#        dest: "/var/services/101-devops/.env"
+#        owner: root
+#        group: root
+#        mode: "0600"
+#      notify: Restart DevOps stack
+
+    ###########################################################################
+    # Network — JOIN core_proxy
+    ###########################################################################
+    # ✅ FIX: Replaced missing include_tasks with direct network declaration
+#    - name: Ensure shared core_proxy exists
+#      community.docker.docker_network:
+#        name: core_proxy
+#        external: true
+#        state: present
+
+#    - name: Create devops_internal
+#      community.docker.docker_network:
+#        name: devops_internal
+#        internal: true
+#        state: present
+
+    ###########################################################################
+    # Compose & Caddyfile (Delegated to control-core)
+    ###########################################################################
+#    - name: Sync compose.yml
+#      copy:
+#        src: "../../services/control/101-devops/compose.yml"
+#        dest: "{{ service_root }}/compose.yml"
+#        mode: "0644"
+
+    - name: Deploy DevOps compose.yml from template
+      template:
+        src: "{{ playbook_dir }}/../templates/compose-devops.yml.j2"
+        dest: "/var/services/101-devops/compose.yml"
+        owner: root
+        group: root
+        mode: "0644"
+        # Start DevOps stack late down (which uses docker_compose_v2 with state: present) will automatically
+        # read the newly templated compose.yml and start/restart the containers anyway.
+#      notify: Restart DevOps stack
+
+    - name: Sync static semaphore-config.json
+      copy:
+        src: "../../services/control/101-devops/semaphore-config.json"
+        dest: "{{ service_root }}/semaphore-config.json"
+        mode: "0644"
+      notify: Restart Semaphore
+
+    ###########################################################################
+    # Deploy
+    ###########################################################################
+    - name: Start DevOps stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ service_root }}"
+        env_files: ["{{ service_root }}/.env"]
+        state: present
+        pull: always
+        remove_orphans: true
+
+    ###########################################################################
+    # Validate Forgejo SSO Configuration (manual UI setup recommended)
+    ###########################################################################
+    - name: Extract secrets from SOPS
+      set_fact:
+        forgejo_oidc_client_secret: >-
+          {{ lookup('community.sops.sops', sops_env_file, rstrip=false)
+            | regex_findall('FORGEJO_OIDC_CLIENT_SECRET=([^\n]+)')
+            | first }}
+      no_log: true
+
+    - name: Verify Authentik discovery URL reachable from Forgejo container
+      command: >-
+        docker exec forgejo curl -s -o /dev/null -w "%{http_code}" https://auth.h-and-i.com/application/o/forgejo/.well-known/openid-configuration
+      register: discovery_check
+      delegate_to: control-devops
+      changed_when: false
+
+    - name: Show discovery URL status
+      debug:
+        msg:
+          - "Discovery URL HTTP status: {{ discovery_check.stdout }}"
+          - "Client ID: forgejo"
+          - "Client Secret present: {{ forgejo_oidc_client_secret | length > 0 }}"
+          - "Redirect URI: https://git.h-and-i.com/user/oauth2/authentik/callback"
+          - ""
+          - "👉 Setup via UI: Site Admin → Auth Sources → Add → OAuth2 → OIDC"
+          - "   Paste client secret from: tofu output -raw forgejo_oauth_client_secret"
+
+    ###########################################################################
+    # Verify
+    ###########################################################################
+    - name: Show running containers
+      shell: docker ps --format 'table {% raw %}{{.Names}}\t{{.Status}}{% endraw %}'
+      register: docker_ps_result
+      changed_when: false
+
+    - name: Done
+      debug:
+        msg:
+          - "✅ DevOps online — Forgejo, Code-Server, Semaphore, Termix"
+          - "Git:     git.h-and-i.com → 192.168.8.101:3000"
+          - "Code:    code.h-and-i.com → 192.168.8.101:8080"
+          - "Semaphore: semaphore.h-and-i.com → 192.168.8.101:3001"
+          - "Termix:  termix.h-and-i.com → 192.168.8.101:8081"
+          - "{{ docker_ps_result.stdout_lines }}"
+
+  handlers:
+    - name: Restart DevOps stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ service_root }}"
+        state: restarted
+
+    - name: Restart Semaphore
+      community.docker.docker_compose_v2:
+        project_src: "{{ service_root }}"
+        state: restarted
+        services: ["semaphore"]

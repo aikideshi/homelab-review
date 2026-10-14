@@ -1,0 +1,8 @@
+---
+service_root: /var/services/seafile
+service_name: seafile
+seafile_ip: 192.168.8.161
+seafile_data_root: /mnt/seafile-data
+seafile_mysql_root: /mnt/seafile-mysql
+global_sops_env: "{{ playbook_dir }}/../../secrets/global.sops.env"
+sops_env_file: "{{ playbook_dir }}/../../secrets/seafile.sops.env"

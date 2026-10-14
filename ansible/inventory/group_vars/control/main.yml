@@ -1,0 +1,48 @@
+timezone: Australia/Sydney
+puid: 1000
+pgid: 1000
+service_root: /var/services/control
+secrets_root: /var/secrets
+
+# =============================================================================
+# GLOBAL INFRASTRUCTURE VARIABLES
+# =============================================================================
+
+# Node IP Addresses
+core_ip: "192.168.8.100"
+devops_ip: "192.168.8.101"
+edge_ip: "192.168.8.102"
+
+# DevOps Service Ports (on devops node)
+forgejo_port: 3000
+forgejo_ssh_port: 2222
+semaphore_port: 3001
+termix_port: 8081
+code_server_port: 8080
+guacd_port: 4822
+
+# Core Service Ports (on core node)
+authentik_port: 9000
+caddy_metrics_port: 8888
+
+# Domain Configuration
+primary_domain: "h-and-i.com"
+
+# =============================================================================
+# CADDY ROUTING CONFIGURATION
+# =============================================================================
+caddy_stacks:
+  devops:
+    - domain: "git.h-and-i.com"
+      target: "{{ devops_ip }}:{{ forgejo_port }}"
+    - domain: "semaphore.h-and-i.com"
+      target: "{{ devops_ip }}:{{ semaphore_port }}"
+    - domain: "termix.h-and-i.com"
+      target: "{{ devops_ip }}:{{ termix_port }}"
+    - domain: "code.h-and-i.com"
+      target: "{{ devops_ip }}:{{ code_server_port }}"
+
+  # Example for future stacks:
+  # media:
+  #   - domain: "jellyfin.h-and-i.com"
+  #     target: "{{ media_ip }}:8096"

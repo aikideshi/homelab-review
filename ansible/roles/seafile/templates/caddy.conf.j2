@@ -1,0 +1,11 @@
+# Seafile - managed by Ansible - no authentik
+seafile.h-and-i.com {
+  reverse_proxy {{ seafile_ip }}:8000 {
+    header_up Host {host}
+    header_up X-Real-IP {remote}
+    header_up X-Forwarded-Proto {scheme}
+  }
+  request_body {
+    max_size 100GB
+  }
+}

@@ -1,0 +1,10 @@
+---
+- name: Restart AdGuardHome init.d
+  shell: |
+    /etc/init.d/AdGuardHome restart 2>/dev/null || \
+    /etc/init.d/adguardhome restart 2>/dev/null || \
+    service AdGuardHome restart 2>/dev/null || \
+    killall -HUP AdGuardHome 2>/dev/null || \
+    echo "AdGuard auto-reloads config.yaml, no restart needed"
+  changed_when: true
+  failed_when: false

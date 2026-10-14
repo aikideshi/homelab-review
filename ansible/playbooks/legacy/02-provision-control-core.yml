@@ -1,0 +1,285 @@
+---
+- name: PHASE 02 — Provision control-core & Authentik/Caddy
+  hosts: control-core
+  gather_facts: true
+  become: true
+
+  vars:
+    service_name: 100-core
+    service_root: "/var/services/{{ service_name }}"
+    env_files_root: "{{ playbook_dir }}/../../secrets"
+    sops_env_file: "{{ env_files_root }}/100-core.sops.env"
+
+  pre_tasks:
+    - name: Set timezone
+      timezone:
+        name: "{{ timezone | default('Australia/Sydney') }}"
+
+    - name: Install locale support
+      apt:
+        name: locales
+        state: present
+
+    - name: Generate en_AU.UTF-8 locale
+      locale_gen:
+        name: en_AU.UTF-8
+        state: present
+
+    - name: Configure system locale
+      copy:
+        content: |
+          LANG=en_AU.UTF-8
+          LANGUAGE=en_AU:en
+          LC_ALL=en_AU.UTF-8
+        dest: /etc/default/locale
+        mode: "0644"
+
+    - name: Update apt cache & upgrade system
+      apt:
+        update_cache: yes
+        upgrade: dist
+        cache_valid_time: 3600
+      retries: 3
+      delay: 5
+      register: apt_update
+      until: apt_update is succeeded
+
+    - name: Install base packages
+      apt:
+        name:
+          - hx
+          - git
+          - curl
+          - rsync
+          - tmux
+          - ca-certificates
+          - gnupg
+          - lsb-release
+        state: present
+
+  tasks:
+    ###########################################################################
+    # Docker Installation — Identical to edge
+    ###########################################################################
+    - name: Install Docker prerequisites
+      apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+          - fuse-overlayfs
+          - uidmap
+          - dbus
+          - udisks2
+        state: present
+
+    - name: Ensure keyrings directory exists
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Remove conflicting old Docker source files
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/docker.sources
+        - /etc/apt/sources.list.d/docker.list
+        - /etc/apt/keyrings/docker.asc
+        - /etc/apt/keyrings/docker.gpg
+
+    - name: Download Docker GPG key
+      shell: |
+        curl -fsSL https://download.docker.com/linux/debian/gpg \
+          | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+
+    - name: Add Docker repository
+      shell: |
+        ARCH=$(dpkg --print-architecture)
+        CODENAME=$(lsb_release -cs)
+        echo "deb [arch=${ARCH} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian ${CODENAME} stable" \
+          > /etc/apt/sources.list.d/docker.list
+      # REMOVED: creates: ... — always ensure correct content
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install Docker & Compose
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-buildx-plugin
+          - docker-compose-plugin
+        state: present
+
+    - name: Configure Docker daemon
+      copy:
+        content: |
+          {% raw %}
+          {
+            "log-driver": "journald",
+            "log-opts": { "tag": "{{.Name}}/{{.ID}}" },
+            "storage-driver": "overlay2",
+            "live-restore": true,
+            "userland-proxy": false,
+            "dns": ["1.1.1.1", "8.8.8.8"]
+          }
+          {% endraw %}
+        dest: /etc/docker/daemon.json
+        mode: "0644"
+
+    - name: Enable & start Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    ###########################################################################
+    # Service Directory
+    ###########################################################################
+    - name: Create service directory
+      file:
+        path: "{{ service_root }}"
+        state: directory
+        mode: "0700"
+        owner: root
+        group: root
+
+    ###########################################################################
+    # Secrets — Merge Global and Stack-Specific SOPS
+    ###########################################################################
+    - name: Deploy merged .env
+      copy:
+        content: |
+          # --- Global Environment Variables ---
+          {{ lookup('community.sops.sops', playbook_dir + '/../../secrets/global.sops.env', rstrip=false) }}
+
+          # --- Stack-Specific Secrets ---
+          {{ lookup('community.sops.sops', sops_env_file, rstrip=false) }}
+        dest: "{{ service_root }}/.env"
+        mode: "0600"
+        owner: root
+        group: root
+      no_log: true
+
+    ###########################################################################
+    # Compose & Caddyfile
+    ###########################################################################
+    - name: Sync compose.yml
+      copy:
+        src: "../../services/control/{{ service_name }}/compose.yml"
+        dest: "{{ service_root }}/compose.yml"
+        mode: "0644"
+        owner: root
+        group: root
+
+    - name: Sync Caddyfile
+      copy:
+        src: "../../services/control/{{ service_name }}/Caddyfile"
+        dest: "{{ service_root }}/Caddyfile"
+        mode: "0644"
+        owner: root
+        group: root
+      notify: Reload Caddy
+
+    - name: Start Authentik + Caddy stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ service_root }}"
+        env_files:
+          - "{{ service_root }}/.env"
+        state: present
+        pull: always
+        remove_orphans: true   # <-- ADD THIS LINE
+
+    ###########################################################################
+    # Authentik Google SSO
+    ###########################################################################
+  #  - name: Configure Google SSO Provider in Authentik
+  #    block:
+  #      - name: Wait for Authentik API
+  #        uri:
+  #          #url: http://authentik-server:9000/api/v3/
+  #          url: http://127.0.0.1:9000/api/v3/
+  #          status_code: [200, 403]
+  #          timeout: 10
+  #        register: api_health
+  #        until: api_health is succeeded
+  #        retries: 30
+  #        delay: 5
+
+  #      - name: Create Google OAuth2 Provider
+  #        uri:
+  #          #url: http://authentik-server:9000/api/v3/providers/oauth2/
+  #          url: http://127.0.0.1:9000/api/v3/providers/oauth2/
+  #         method: POST
+  #          headers:
+  #            Authorization: "Bearer {{ AUTHENTIK_BOOTSTRAP_TOKEN }}"
+  #            Content-Type: "application/json"
+  #          body_format: json
+  #          body:
+  #            name: "Google SSO"
+  #            authentication_flow: "authentication-flow"
+  #            authorization_flow: "provider-authorization"
+  #            client_id: "{{ GOOGLE_OAUTH_CLIENT_ID }}"
+  #            client_secret: "{{ GOOGLE_OAUTH_CLIENT_SECRET }}"
+  #            type: "oauth2"
+  #            sub_type: "google"
+  #            redirect_uris:
+  #              - "https://auth.h-and-i.com/application/o/backchannel/"
+  #          status_code: [200, 201, 409]  # 409 = already exists
+  #        ignore_errors: true
+  #    delegate_to: control-core
+  #    run_once: true
+
+    ###########################################################################
+    # SSH Hardening
+    ###########################################################################
+    - name: Disable SSH password authentication
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?PasswordAuthentication'
+        line: 'PasswordAuthentication no'
+        validate: 'sshd -t -f %s'
+      notify: Restart sshd
+
+    - name: Restart sshd if changed
+      service:
+        name: ssh
+        state: restarted
+      when: sshd_config_changed is defined and sshd_config_changed.changed
+
+    ###########################################################################
+    # Verify
+    ###########################################################################
+    - name: Show running containers
+      shell: >
+        docker ps --format 'table {% raw %}{{.Names}}\t{{.Status}}{% endraw %}'
+      register: docker_ps_result
+
+    - name: Print running containers
+      debug:
+        msg:
+          - "✅ control-core deployed — auth.h-and-i.com"
+          - "Set AUTHENTIK_PROXY_TOKEN after first login"
+          - "{{ docker_ps_result.stdout_lines }}"
+
+  handlers:
+    - name: Restart sshd
+      service:
+        name: sshd
+        state: restarted
+    - name: Reload Caddy
+      community.docker.docker_container_exec:
+        container: caddy
+        command: caddy reload --config /etc/caddy/Caddyfile
+      ignore_errors: true

@@ -1,0 +1,49 @@
+---
+# roles/pve-lxc/tasks/main.yml
+# Run only on PVE host, delegated from playbooks. Needs var lxc_vmid
+
+- name: Ensure subuid/subgid entries exist on PVE host
+  ansible.builtin.lineinfile:
+    path: "/etc/{{ item.file }}"
+    line: "{{ item.line }}"
+    regexp: "^{{ item.line | regex_escape() }}$"
+    state: present
+  loop:
+    - { file: subuid, line: "root:100000:1000" }
+    - { file: subuid, line: "root:1000:1" }
+    - { file: subuid, line: "root:101001:64535" }
+    - { file: subgid, line: "root:100000:1000" }
+    - { file: subgid, line: "root:1000:1" }
+    - { file: subgid, line: "root:101001:64535" }
+
+- name: Ensure LXC idmap block for unprivileged + bind mounts
+  ansible.builtin.blockinfile:
+    path: "/etc/pve/lxc/{{ lxc_vmid }}.conf"
+    marker: "# {mark} ANSIBLE MANAGED IDMAP BLOCK"
+    block: |
+      lxc.idmap: u 0 100000 1000
+      lxc.idmap: u 1000 1000 1
+      lxc.idmap: u 1001 101001 64535
+      lxc.idmap: g 0 100000 1000
+      lxc.idmap: g 1000 1000 1
+      lxc.idmap: g 1001 101001 64535
+  register: idmap_result
+
+- name: Ensure prlimit block for high nofile
+  ansible.builtin.blockinfile:
+    path: "/etc/pve/lxc/{{ lxc_vmid }}.conf"
+    marker: "# {mark} ANSIBLE MANAGED PRLIMIT BLOCK"
+    block: |
+      lxc.prlimit.nofile: 655360:655360
+      lxc.prlimit.memlock: unlimited:unlimited
+      lxc.prlimit.nproc: 655360:655360
+  register: prlimit_result
+
+- name: Restart LXC if idmap or prlimit changed
+  ansible.builtin.shell: pct stop {{ lxc_vmid }} && sleep 2 && pct start {{ lxc_vmid }}
+  when: idmap_result.changed or prlimit_result.changed
+  changed_when: true
+
+- name: Ensure LXC onboot enabled
+  ansible.builtin.shell: pct set {{ lxc_vmid }} -onboot 1
+  changed_when: false

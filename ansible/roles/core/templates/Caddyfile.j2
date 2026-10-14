@@ -1,0 +1,32 @@
+{
+	email {{ caddy_email }}
+	acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN} {
+		resolvers 1.1.1.1:53 8.8.8.8:53
+	}
+}
+(authentik_proxy) {
+	reverse_proxy http://authentik-server:9000
+}
+(authentik_forward_auth) {
+	forward_auth http://authentik-server:9000 {
+		uri /outpost.goauthentik.io/auth/caddy
+		copy_headers X-authentik-username X-authentik-groups X-authentik-email X-authentik-name X-authentik-uid X-authentik-jwt Authorization
+	}
+	@auth {
+		path /outpost.goauthentik.io/*
+	}
+	handle @auth {
+		reverse_proxy http://authentik-server:9000
+	}
+}
+auth.h-and-i.com {
+	import authentik_proxy
+}
+registry.h-and-i.com {
+	import authentik_forward_auth
+	reverse_proxy registry:5000
+}
+import caddy.d/*.conf
+:8888 {
+	metrics
+}

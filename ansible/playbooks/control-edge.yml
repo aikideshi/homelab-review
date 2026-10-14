@@ -1,0 +1,17 @@
+---
+- name: Control-Edge — Cloudflared
+  hosts: control-edge
+  become: false
+  gather_facts: true
+
+  vars:
+    service_name: edge
+    service_root: "/var/services/{{ service_name }}"
+    timezone: Australia/Sydney
+    global_sops_env_file: "{{ playbook_dir }}/../../secrets/global.sops.env"
+    service_sops_env_file: "{{ playbook_dir }}/../../secrets/edge.sops.env"
+
+  roles:
+    - base
+    - docker
+    - edge

@@ -1,0 +1,91 @@
+---
+- name: PHASE 04 — Configure Caddy Reverse Proxy & DNS
+  hosts: control-core
+  gather_facts: false
+  become: true
+
+  vars:
+    caddy_stack_dirs:
+      - 101-devops
+      # - 103-media
+      # - 104-monitoring
+
+  tasks:
+    ###########################################################################
+    # Caddy Configuration
+    ###########################################################################
+    - name: Ensure Caddy conf.d directory exists
+      file:
+        path: /var/services/100-core/caddy.d
+        state: directory
+        mode: "0755"
+
+    - name: Sync stack Caddyfiles to control-core
+      copy:
+        src: "../../services/control/{{ item }}/Caddyfile"
+        dest: "/var/services/100-core/caddy.d/{{ item }}.conf"
+        mode: "0644"
+      loop: "{{ caddy_stack_dirs }}"
+      notify: Reload Caddy
+
+    - name: Deploy main Core Caddyfile
+      copy:
+        src: "../../services/control/100-core/Caddyfile"
+        dest: /var/services/100-core/Caddyfile
+        mode: "0644"
+      notify: Reload Caddy
+
+    ###########################################################################
+    # Dynamic DNS Extraction from Caddyfiles
+    ###########################################################################
+    - name: Read all deployed Caddyfiles
+      slurp:
+        src: "/var/services/100-core/caddy.d/{{ item }}.conf"
+      loop: "{{ caddy_stack_dirs }}"
+      register: caddyfile_contents
+      delegate_to: localhost
+
+    - name: Extract domain names from Caddyfiles
+      set_fact:
+        all_domains: "{{ all_domains | default([]) + (item.content | b64decode | regex_findall('^([a-zA-Z0-9][-a-zA-Z0-9.]*\\.[a-zA-Z]{2,})\\s*\\{', multiline=true)) }}"
+      loop: "{{ caddyfile_contents.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Deduplicate extracted domains
+      set_fact:
+        unique_domains: "{{ all_domains | unique | sort }}"
+
+    - name: Display extracted domains
+      debug:
+        msg: "Found domains: {{ unique_domains }}"
+
+    ###########################################################################
+    # AdGuard Home DNS Rewrites (All domains point to Caddy)
+    ###########################################################################
+    - name: Ensure AdGuard Home DNS rewrites exist
+      uri:
+        url: "http://{{ ADGUARD_HOST }}:{{ ADGUARD_PORT }}/control/rewrite/add"
+        method: POST
+        url_username: "{{ ADGUARD_USER }}"
+        url_password: "{{ ADGUARD_PASSWORD }}"
+        force_basic_auth: yes
+        body_format: json
+        body:
+          domain: "{{ item }}"
+          answer: "192.168.8.100"  # All domains point to Caddy
+        status_code: [200, 400]  # 200 = created, 400 = already exists
+        validate_certs: no
+      loop: "{{ unique_domains }}"
+      register: adguard_result
+      failed_when: adguard_result.status != 200 and adguard_result.status != 400
+      changed_when: adguard_result.status == 200
+      delegate_to: localhost
+      when: ADGUARD_HOST is defined
+
+  handlers:
+    - name: Reload Caddy
+      community.docker.docker_compose_v2:
+        project_src: /var/services/100-core
+        state: restarted
+        services: ["caddy"]

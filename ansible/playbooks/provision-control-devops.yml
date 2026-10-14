@@ -1,0 +1,104 @@
+---
+- name: PHASE 03 — Provision devops & Forgejo/Code/Semaphore/Termix
+  hosts: control-devops
+  gather_facts: true
+  become: true
+  vars:
+    service_name: 101-devops
+    service_root: "/var/services/{{ service_name }}"
+    env_files_root: "{{ playbook_dir }}/../../secrets"
+    sops_env_file: "{{ env_files_root }}/101-devops.sops.env"
+
+  tasks:
+    ###########################################################################
+    # Modularized Base & Docker Setup
+    ###########################################################################
+    - name: Include base setup tasks
+      include_tasks: ../tasks/base-setup.yml
+
+    - name: Include Docker setup tasks
+      include_tasks: ../tasks/docker-setup.yml
+
+    ###########################################################################
+    # Service Env & Dirs
+    ###########################################################################
+    - name: Create service root
+      file:
+        path: "{{ service_root }}"
+        state: directory
+        mode: "0700"
+        owner: root
+        group: root
+
+    ###########################################################################
+    # Secrets — Merge Global and Stack-Specific SOPS
+    ###########################################################################
+    - name: Deploy merged .env
+      copy:
+        content: |
+          # --- Global Environment Variables ---
+          {{ lookup('community.sops.sops', playbook_dir + '/../../secrets/global.sops.env', rstrip=false) }}
+
+          # --- Stack-Specific Secrets ---
+          {{ lookup('community.sops.sops', sops_env_file, rstrip=false) }}
+        dest: "{{ service_root }}/.env"
+        mode: "0600"
+        owner: root
+        group: root
+      no_log: true
+
+    ###########################################################################
+    # Compose & Configs
+    ###########################################################################
+    - name: Deploy DevOps compose.yml from template
+      template:
+        src: "{{ playbook_dir }}/../templates/compose-devops.yml.j2"
+        dest: "/var/services/101-devops/compose.yml"
+        owner: root
+        group: root
+        mode: "0644"
+      notify: Restart DevOps stack
+
+    - name: Sync static semaphore-config.json
+      copy:
+        src: "../../services/control/101-devops/semaphore-config.json"
+        dest: "{{ service_root }}/semaphore-config.json"
+        mode: "0644"
+      notify: Restart Semaphore
+
+    ###########################################################################
+    # Deploy
+    ###########################################################################
+    - name: Start DevOps stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ service_root }}"
+        env_files: ["{{ service_root }}/.env"]
+        state: present
+        pull: always
+        remove_orphans: true
+
+    ###########################################################################
+    # Verify
+    ###########################################################################
+    - name: Show running containers
+      shell: docker ps --format 'table {% raw %}{{.Names}}\t{{.Status}}{% endraw %}'
+      register: docker_ps_result
+      changed_when: false
+
+    - name: Done
+      debug:
+        msg:
+          - "✅ DevOps online — Forgejo, Code-Server, Semaphore, Termix"
+          - "{{ docker_ps_result.stdout_lines }}"
+
+  handlers:
+    - name: Restart DevOps stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ service_root }}"
+        state: restarted
+
+    - name: Restart Semaphore
+      community.docker.docker_compose_v2:
+        project_src: "{{ service_root }}"
+        state: restarted
+        services: ["semaphore"]

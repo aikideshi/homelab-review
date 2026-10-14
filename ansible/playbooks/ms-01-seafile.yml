@@ -1,0 +1,13 @@
+---
+- name: Provision Seafile on ms-01 (LXC 161)
+  hosts: seafile
+  become: true
+  vars:
+    service_root: /var/services/seafile
+    service_name: seafile
+    global_sops_env: "{{ playbook_dir }}/../../secrets/global.sops.env"
+    sops_env_file: "{{ playbook_dir }}/../../secrets/seafile.sops.env"
+  roles:
+    - base
+    - docker
+    - seafile

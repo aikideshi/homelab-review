@@ -1,0 +1,26 @@
+# playbooks/upgrade-all.yml
+---
+- name: Upgrade all managed hosts
+  hosts: all
+  become: true
+  serial: 1   # one at a time, avoids mass reboot
+  tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Upgrade packages
+      ansible.builtin.apt:
+        upgrade: safe      # safer than dist; dist can remove packages
+      register: upgrade_result
+
+    - name: Check if reboot required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: reboot required"
+      when: reboot_required.stat.exists

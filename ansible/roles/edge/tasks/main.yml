@@ -1,0 +1,35 @@
+---
+- name: Create service directory
+  file:
+    path: "{{ service_root }}"
+    state: directory
+    mode: "0700"
+
+- name: Deploy .env from SOPS (global + service)
+  template:
+    src: .env.j2
+    dest: "{{ service_root }}/.env"
+    mode: "0600"
+  no_log: true
+
+- name: Deploy compose.yml
+  template:
+    src: compose.yml.j2
+    dest: "{{ service_root }}/compose.yml"
+    mode: "0644"
+
+- name: Start Cloudflared
+  community.docker.docker_compose_v2:
+    project_src: "{{ service_root }}"
+    env_files: ["{{ service_root }}/.env"]
+    state: present
+    pull: always
+
+- name: Verify running containers
+  shell: docker ps --format 'table {{ "{{.Names}}\t{{.Status}}" }}'
+  changed_when: false
+  register: docker_ps_result
+
+- name: Print status
+  debug:
+    msg: "{{ docker_ps_result.stdout_lines }}"

@@ -1,0 +1,10 @@
+
+Check your inventory hosts.yml - you need group flint2 to match:
+---
+all:
+  children:
+    flint2:
+      hosts:
+        flint2:
+          ansible_host: 192.168.8.1
+...

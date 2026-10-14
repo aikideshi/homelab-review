@@ -1,0 +1,23 @@
+---
+- name: PHASE 03 — Provision devops (101)
+  hosts: control-devops
+  become: true
+  gather_facts: true
+
+  pre_tasks:
+    - name: Set timezone
+      community.general.timezone:
+        name: "{{ timezone | default('Australia/Sydney') }}"
+
+  roles:
+    - base
+    - docker
+    - devops
+
+  post_tasks:
+    - name: Show running
+      ansible.builtin.command: docker ps
+      changed_when: false
+      register: ps
+    - ansible.builtin.debug:
+        var: ps.stdout_lines

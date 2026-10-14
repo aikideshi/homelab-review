@@ -1,0 +1,147 @@
+name: core
+networks:
+  core_proxy:
+    name: core_proxy
+  core_internal:
+    name: core_internal
+    internal: true
+
+services:
+  # ---------- Reverse Proxy — Caddy ----------
+  caddy:
+    image: ghcr.io/caddybuilds/caddy-cloudflare:${CADDY_VERSION}
+    container_name: caddy
+    restart: unless-stopped
+    env_file: .env   # <--- ADD THIS LINE
+    environment:
+      - CLOUDFLARE_API_TOKEN=${CLOUDFLARE_API_TOKEN}
+      - CADDY_EMAIL=${CADDY_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./caddy.d:/etc/caddy/caddy.d:ro
+      - ./data/caddy/data:/data
+      - ./data/caddy/config:/config
+    networks:
+      - core_proxy
+
+  # ---------- Authentik Database ----------
+  authentik-db:
+    image: docker.io/library/postgres:${AUTHENTIK_PG_VERSION}
+    container_name: authentik-db
+    restart: unless-stopped
+    networks: [core_internal]
+    env_file: .env
+    environment:
+      POSTGRES_USER: ${AUTHENTIK_POSTGRES_USER:-authentik}
+      POSTGRES_DB:   ${AUTHENTIK_POSTGRES_DB:-authentik}
+      POSTGRES_PASSWORD: ${AUTHENTIK_POSTGRES_PASSWORD}
+    volumes:
+      - ./data/authentik-postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authentik -d authentik"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ---------- Authentik Cache ----------
+  authentik-redis:
+    image: docker.io/library/redis:${AUTHENTIK_REDIS_VERSION}
+    container_name: authentik-redis
+    restart: unless-stopped
+    networks: [core_internal]
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - ./data/authentik-redis:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  # ---------- Authentik Server (Includes Embedded Outpost) ----------
+  authentik-server:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_VERSION}
+    container_name: authentik-server
+    restart: unless-stopped
+    command: server
+    networks: [core_proxy, core_internal]
+    ports:
+      - "127.0.0.1:9000:9000"  # Localhost only — secured
+    env_file: .env
+    environment:
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_POSTGRESQL__HOST: authentik-db
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_POSTGRES_USER:-authentik}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_POSTGRES_DB:-authentik}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_POSTGRES_PASSWORD}
+      # Fix "site not supported for access" — canonical domain
+      AUTHENTIK_CORE__DOMAIN: auth.h-and-i.com
+      AUTHENTIK_CORE__DEFAULT_PROTOCOL: https
+      AUTHENTIK_LISTEN__TRUSTED_PROXY_CIDRS: 0.0.0.0/0
+      AUTHENTIK_SESSION__COOKIE_DOMAIN: auth.h-and-i.com
+      AUTHENTIK_SESSION__COOKIE_SECURE: "true"
+      # Bootstrap credentials (only used on FIRST DB init)
+      AUTHENTIK_BOOTSTRAP_EMAIL: ${AUTHENTIK_BOOTSTRAP_EMAIL}
+      AUTHENTIK_BOOTSTRAP_PASSWORD: ${AUTHENTIK_BOOTSTRAP_PASSWORD}
+    depends_on:
+      authentik-db:   { condition: service_healthy }
+      authentik-redis: { condition: service_healthy }
+    volumes:
+      - ./data/authentik/media:/media
+      - ./data/authentik/templates:/templates
+      - ./data/authentik/certs:/certs
+
+  # ---------- Authentik Worker ----------
+  authentik-worker:
+    image: ghcr.io/goauthentik/server:${AUTHENTIK_VERSION}
+    container_name: authentik-worker
+    restart: unless-stopped
+    command: worker
+    networks: [core_internal]
+    env_file: .env
+    environment:
+      AUTHENTIK_REDIS__HOST: authentik-redis
+      AUTHENTIK_POSTGRESQL__HOST: authentik-db
+      AUTHENTIK_POSTGRESQL__USER: ${AUTHENTIK_POSTGRES_USER:-authentik}
+      AUTHENTIK_POSTGRESQL__NAME: ${AUTHENTIK_POSTGRES_DB:-authentik}
+      AUTHENTIK_POSTGRESQL__PASSWORD: ${AUTHENTIK_POSTGRES_PASSWORD}
+    depends_on:
+      authentik-db:   { condition: service_healthy }
+      authentik-redis: { condition: service_healthy }
+    volumes:
+      - ./data/authentik/media:/media
+      - ./data/authentik/templates:/templates
+      - ./data/authentik/certs:/certs
+
+# NOTE: authentik-proxy container REMOVED — using EMBEDDED outpost instead
+# No AUTHENTIK_PROXY_TOKEN required anymore ✅
+#  authentik-proxy:
+#    image: ghcr.io/goauthentik/proxy:${AUTHENTIK_VERSION}
+#    container_name: authentik-proxy
+#    restart: unless-stopped
+#    networks:
+#      - core_proxy
+#    environment:
+#      AUTHENTIK_HOST:          http://authentik-server:9000
+#      AUTHENTIK_HOST_BROWSER:  https://auth.h-and-i.com
+#      AUTHENTIK_INSECURE:      "true"
+#      AUTHENTIK_TOKEN:         ${AUTHENTIK_PROXY_TOKEN}
+
+# ---------- Docker Registry ----------
+  registry:
+    image: registry:2
+    container_name: registry
+    restart: unless-stopped
+    volumes:
+      - registry-data:/var/lib/registry
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    networks:
+      - core_proxy
+
+volumes:
+  registry-data:

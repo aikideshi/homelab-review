@@ -1,0 +1,51 @@
+---
+- name: Install Docker prerequisites
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, gnupg, lsb-release]
+    state: present
+    update_cache: true
+- name: Ensure keyrings dir
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+- name: Remove old DEB822 docker.sources
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/docker.sources
+    state: absent
+- name: Add Docker GPG key
+  ansible.builtin.get_url:
+    url: https://download.docker.com/linux/debian/gpg
+    dest: /etc/apt/keyrings/docker.asc
+    mode: "0644"
+- name: Add Docker repo
+  ansible.builtin.template:
+    src: docker.list.j2
+    dest: /etc/apt/sources.list.d/docker.list
+    mode: "0644"
+- name: Install Docker & Compose
+  ansible.builtin.apt:
+    name: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+    state: present
+    update_cache: true
+- name: Configure daemon.json
+  ansible.builtin.template:
+    src: daemon.json.j2
+    dest: /etc/docker/daemon.json
+    mode: "0644"
+  notify: Restart Docker
+- name: Ensure systemd drop-in dir exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d
+    state: directory
+    mode: "0755"
+- name: Disable TCP drop-in for now (remove)
+  ansible.builtin.file:
+    path: /etc/systemd/system/docker.service.d/tcp.conf
+    state: absent
+  notify: Restart Docker
+- name: Enable & start Docker
+  ansible.builtin.systemd:
+    name: docker
+    enabled: true
+    state: started

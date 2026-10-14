@@ -1,0 +1,46 @@
+- name: PHASE 04 — Configure Caddy & DNS
+  hosts: control-core
+  become: true
+  gather_facts: false
+  vars:
+    service_root: /var/services/100-core
+    caddy_core_ip: 192.168.8.100
+    seafile_lxc_ip: 192.168.8.161
+    env_files_root: "{{ playbook_dir }}/../../secrets"
+    global_sops_env: "{{ env_files_root }}/global.sops.env"
+    core_sops_env: "{{ env_files_root }}/100-core.sops.env"
+
+  tasks:
+    - name: Load global env raw
+      set_fact:
+        _global_env: "{{ lookup('community.sops.sops', global_sops_env) }}"
+
+    - name: Parse ADGUARD vars
+      set_fact:
+        ADGUARD_HOST: "{{ _global_env | regex_findall('ADGUARD_HOST=(.*)') | first | trim }}"
+        ADGUARD_PORT: "{{ _global_env | regex_findall('ADGUARD_PORT=(.*)') | first | trim }}"
+        ADGUARD_USER: "{{ _global_env | regex_findall('ADGUARD_USER=(.*)') | first | trim }}"
+        ADGUARD_PASSWORD: "{{ _global_env | regex_findall('ADGUARD_PASSWORD=(.*)') | first | trim }}"
+
+    - import_role: name=caddy
+      vars:
+        sops_env_file: "{{ core_sops_env }}"
+
+    - name: Extract domains
+      shell: grep -hE '^[a-z0-9.-]+\.[a-z]{2,}.*\{' {{ service_root }}/caddy.d/*.conf | sed -E 's/ *\{.*//; s/,/ /g'
+      register: domain_grep
+      changed_when: false
+
+    - name: Add AdGuard rewrites
+      become: false
+      uri:
+        url: "http://{{ ADGUARD_HOST }}:{{ ADGUARD_PORT }}/control/rewrite/add"
+        method: POST
+        url_username: "{{ ADGUARD_USER }}"
+        url_password: "{{ ADGUARD_PASSWORD }}"
+        force_basic_auth: true
+        body_format: json
+        body: { domain: "{{ item }}", answer: "{{ caddy_core_ip }}" }
+        status_code: [200,400]
+      loop: "{{ domain_grep.stdout | regex_findall('[a-z0-9.-]+\\.[a-z]{2,}') | unique }}"
+      delegate_to: localhost

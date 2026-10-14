@@ -1,0 +1,21 @@
+---
+- name: Ensure python3 + PyYAML on Flint2
+  ansible.builtin.raw: |
+    opkg update; opkg install python3 python3-yaml || apk add python3 py3-yaml || true
+  changed_when: false
+- name: Find real AdGuard config
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /etc/AdGuardHome/AdGuardHome.yaml
+    - /etc/AdGuardHome/config.yaml
+    - /etc/adguardhome.yaml
+  register: adguard_paths
+- name: Set config path
+  ansible.builtin.set_fact:
+    adguard_config: "{{ (adguard_paths.results | selectattr('stat.exists') | first).stat.path | default(adguard_config) }}"
+- name: Reconcile AdGuard rewrites (sort, dedup, ensure Caddy IP)
+  ansible.builtin.script:
+    cmd: reconcile_adguard.py --config {{ adguard_config }} --rewrites '{{ adguard_desired_rewrites | to_json }}'
+  register: adguard_result
+  changed_when: "'CHANGED' in adguard_result.stdout"

@@ -1,0 +1,1 @@
+adguard_password: "{{ lookup('community.sops.sops', 'secrets/global.sops.env', gpg_key) | regex_search('FLINT2_PASSWORD=(.*)', '\\1') }}"

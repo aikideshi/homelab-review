@@ -1,0 +1,58 @@
+---
+- name: PHASE 05 — Provision Seafile (LXC 161)
+  hosts: seafile_new # 192.168.8.161 in inventory
+  gather_facts: true
+  become: true
+  vars:
+    service_name: 161-seafile
+    service_root: "/var/services/{{ service_name }}"
+    env_files_root: "{{ playbook_dir }}/../../secrets"
+    sops_env_file: "{{ env_files_root }}/161-seafile.sops.env"
+
+  tasks:
+    - name: Include base setup tasks
+      include_tasks:../tasks/base-setup.yml
+      tags: [base, config]
+
+    - name: Include Docker setup tasks
+      include_tasks:../tasks/docker-setup.yml
+      tags: [docker, config]
+
+    - name: Create service root
+      file: { path: "{{ service_root }}", state: directory, mode: "0700" }
+      tags: [config]
+
+    - name: Deploy merged.env
+      copy:
+        content: |
+          # --- Global ---
+          {{ lookup('community.sops.sops', playbook_dir + '/../../secrets/global.sops.env', rstrip=false) }}
+          # --- Seafile Stack ---
+          {{ lookup('community.sops.sops', sops_env_file, rstrip=false) }}
+        dest: "{{ service_root }}/.env"
+        mode: "0600"
+      no_log: true
+      tags: [config]
+
+    - name: Deploy Seafile compose.yml from template
+      template:
+        src: "{{ playbook_dir }}/../templates/compose-seafile.yml.j2"
+        dest: "{{ service_root }}/compose.yml"
+        mode: "0644"
+      notify: Restart Seafile
+      tags: [config, deploy]
+
+    - name: Start Seafile stack
+      community.docker.docker_compose_v2:
+        project_src: "{{ service_root }}"
+        env_files: ["{{ service_root }}/.env"]
+        state: present
+        pull: always
+        remove_orphans: true
+      tags: [deploy]
+
+  handlers:
+    - name: Restart Seafile
+      community.docker.docker_compose_v2:
+        project_src: "{{ service_root }}"
+        state: restarted

@@ -1,0 +1,18 @@
+---
+- name: Provision Samba on ms-01 (LXC 178)
+  hosts: samba
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Load SOPS secrets
+      community.sops.load_vars:
+        file: "{{ playbook_dir }}/../../secrets/samba.sops.yaml"
+
+    - name: Import base role
+      ansible.builtin.import_role:
+        name: base
+
+    - name: Import samba role
+      ansible.builtin.import_role:
+        name: samba

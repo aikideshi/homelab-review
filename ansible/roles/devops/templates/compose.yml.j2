@@ -1,0 +1,97 @@
+name: devops
+networks:
+  devops_internal:
+    name: devops_internal
+
+services:
+  forgejo:
+    image: codeberg.org/forgejo/forgejo:${FORGEJO_VERSION}
+    extra_hosts:
+      - "auth.h-and-i.com:192.168.8.100"
+    container_name: forgejo
+    env_file: [.env]
+    environment:
+      USER_UID: "${PUID}"
+      USER_GID: "${PGID}"
+      FORGEJO__database__DB_TYPE: postgres
+      FORGEJO__database__HOST: forgejo-db:5432
+      FORGEJO__database__NAME: forgejo
+      FORGEJO__database__USER: ${FORGEJO_DB_USER}
+      FORGEJO__database__PASSWD: ${FORGEJO_DB_PASSWORD}
+      FORGEJO__server__ROOT_URL: https://git.h-and-i.com/
+      FORGEJO__security__INSTALL_LOCK: "true"
+      FORGEJO__service__DISABLE_REGISTRATION: "false"
+      FORGEJO__service__ALLOW_ONLY_EXTERNAL_REGISTRATION: "true"
+      FORGEJO__openid__ENABLE_OPENID_SIGNUP: "true"
+    ports: ["3000:3000"]
+    networks: [devops_internal]
+    depends_on:
+      forgejo-db: {condition: service_healthy}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  forgejo-db:
+    image: postgres:18-alpine
+    container_name: forgejo-db
+    env_file: [.env]
+    environment:
+      POSTGRES_USER: ${FORGEJO_DB_USER}
+      POSTGRES_PASSWORD: ${FORGEJO_DB_PASSWORD}
+      POSTGRES_DB: forgejo
+    volumes: [forgejo_db_data:/var/lib/postgresql]
+    networks: [devops_internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${FORGEJO_DB_USER} -d forgejo"]
+      interval: 10s
+      retries: 5
+    restart: unless-stopped
+
+  forgejo-runner:
+    image: code.forgejo.org/forgejo/runner:${FORGEJO_RUNNER_VERSION}
+    container_name: forgejo-runner
+    user: "0:0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data/forgejo-runner:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [devops_internal]
+    depends_on:
+      forgejo:
+        condition: service_healthy
+    restart: unless-stopped
+    command: forgejo-runner daemon --config /data/config.yaml
+
+  code-server:
+    image: codercom/code-server:${CODE_SERVER_VERSION}
+    container_name: code-server
+    command: --auth=none
+    env_file: [.env]
+    ports: ["8080:8080"]
+    volumes: ["./data/code-server:/config"]
+    networks: [devops_internal]
+    user: "${PUID}:${PGID}"
+    restart: unless-stopped
+
+  termix:
+    image: ghcr.io/lukegus/termix:${TERMIX_VERSION}
+    container_name: termix
+    env_file: [.env]
+    ports: ["8081:8080"]
+    volumes: ["./data/termix:/app/data"]
+    networks: [devops_internal]
+    restart: unless-stopped
+
+  guacd:
+    image: guacamole/guacd:${GUACD_VERSION}
+    container_name: guacd
+    volumes: ["./data/guacd/drive:/drive:rw", "./data/guacd/record:/record:rw"]
+    networks: [devops_internal]
+    restart: unless-stopped
+
+volumes:
+  forgejo_db_data:

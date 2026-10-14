@@ -1,0 +1,133 @@
+---
+- name: PHASE 01 — Provision control-edge & Cloudflared
+  hosts: control-edge
+  gather_facts: true
+  become: true
+
+  vars:
+    service_name: 102-edge
+    service_root: "/var/services/{{ service_name }}"
+    sops_env_file: "{{ playbook_dir }}/../../secrets/102-edge.sops.env"
+
+  pre_tasks:
+    - name: Set timezone
+      timezone:
+        name: "{{ timezone | default('Australia/Sydney') }}"
+
+    - name: Update apt cache & upgrade system (Cached for 1h)
+      apt:
+        update_cache: yes
+        upgrade: dist
+        cache_valid_time: 3600
+      register: apt_update
+      retries: 3
+      delay: 5
+      until: apt_update is succeeded
+
+    - name: Install base packages
+      apt:
+        name: [hx, git, curl, rsync, tmux, ca-certificates, gnupg, lsb-release]
+        state: present
+
+  tasks:
+    - name: Install Docker prerequisites
+      apt:
+        name: [ca-certificates, curl, gnupg, lsb-release, fuse-overlayfs, uidmap, dbus, udisks2]
+        state: present
+
+    - name: Ensure keyrings directory exists
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download Docker GPG key
+      shell: |
+        curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+        chmod a+r /etc/apt/keyrings/docker.gpg
+      args:
+        creates: /etc/apt/keyrings/docker.gpg
+
+    - name: Add Docker repository
+      copy:
+        content: "deb [arch={{ ansible_facts.architecture }} signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian {{ ansible_facts.distribution_release }} stable\n"
+        dest: /etc/apt/sources.list.d/docker.list
+        mode: "0644"
+
+    - name: Install Docker & Compose
+      apt:
+        name: [docker-ce, docker-ce-cli, containerd.io, docker-buildx-plugin, docker-compose-plugin]
+        state: present
+
+    - name: Configure Docker daemon
+      copy:
+        content: |
+          {
+            "log-driver": "journald",
+            "storage-driver": "overlay2",
+            "live-restore": true,
+            "userland-proxy": false,
+            "dns": ["1.1.1.1", "9.9.9.9"]
+          }
+        dest: /etc/docker/daemon.json
+        mode: "0644"
+
+    - name: Enable & start Docker
+      systemd:
+        name: docker
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+    - name: Create service directory
+      file:
+        path: "{{ service_root }}"
+        state: directory
+        mode: "0700"
+
+    - name: Deploy .env from SOPS
+      copy:
+        content: "{{ lookup('community.sops.sops', sops_env_file) }}"
+        dest: "{{ service_root }}/.env"
+        mode: "0600"
+      no_log: true
+
+    - name: Sync compose.yml
+      copy:
+        src: "../../services/control/{{ service_name }}/compose.yml"
+        dest: "{{ service_root }}/compose.yml"
+        mode: "0644"
+
+    - name: Start Cloudflared
+      community.docker.docker_compose_v2:
+        project_src: "{{ service_root }}"
+        env_files: ["{{ service_root }}/.env"]
+        state: present
+        pull: always
+
+#    - name: Show running containers
+#      shell: >
+#        docker ps --format 'table {% raw %}{{.Names}}\t{{.Status}}{% endraw %}'      register: docker_ps_result
+#      changed_when: false
+#
+#    - name: Deployment complete
+#      debug:
+#        msg: "✅ Cloudflared deployed on 102-edge"
+
+    ###########################################################################
+    # Verify
+    ###########################################################################
+    - name: Show running containers
+      shell: >
+        docker ps --format 'table {% raw %}{{.Names}}\t{{.Status}}{% endraw %}'
+      register: docker_ps_result
+
+    - name: Print running containers
+      debug:
+        msg: "{{ docker_ps_result.stdout_lines }}"
+
+    - name: Deployment complete
+      debug:
+        msg:
+          - "✅ Cloudflared deployed — check: ssh root@192.168.8.102 'docker logs cloudflared-edge'"
+          - "{{ docker_ps_result.stdout_lines }}"   # ← was docker_ps, missing _result

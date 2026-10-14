@@ -1,0 +1,9 @@
+---
+service_name: 102-edge
+service_root: "/var/services/{{ service_name }}"
+service_user: root
+timezone: Australia/Sydney
+
+# these can be overridden by playbook, but have defaults so it never crashes
+global_sops_env_file: "{{ playbook_dir }}/../../secrets/global.sops.env"
+service_sops_env_file: "{{ playbook_dir }}/../../secrets/102-edge.sops.env"

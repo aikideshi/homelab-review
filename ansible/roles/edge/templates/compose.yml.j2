@@ -1,0 +1,10 @@
+name: edge
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-latest}
+    container_name: cloudflared-edge
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARED_TUNNEL_TOKEN}
+      - TZ={{ timezone }}

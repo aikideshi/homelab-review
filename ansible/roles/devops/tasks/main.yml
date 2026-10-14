@@ -1,0 +1,72 @@
+---
+- name: Ensure service root exists
+  ansible.builtin.file:
+    path: /var/services/devops
+    state: directory
+    mode: "0700"
+
+- name: Ensure forgejo-runner data dir
+  ansible.builtin.file:
+    path: /var/services/devops/data/forgejo-runner
+    state: directory
+    mode: "0750"
+    owner: "1000"
+    group: "1000"
+
+- name: Load sops secrets into vars
+  vars:
+    _global: "{{ lookup('community.sops.sops', playbook_dir + '/../../secrets/global.sops.env') }}"
+    _devops: "{{ lookup('community.sops.sops', playbook_dir + '/../../secrets/devops.sops.env') }}"
+  set_fact:
+    PUID: "{{ (_global | regex_search('PUID=(.*)', '\\1') | default(['1000'], true) | first) | trim }}"
+    PGID: "{{ (_global | regex_search('PGID=(.*)', '\\1') | default(['1000'], true) | first) | trim }}"
+    FORGEJO_RUNNER_UUID: "{{ (_devops | regex_search('FORGEJO_RUNNER_UUID=(.*)', '\\1') | default([''], true) | first) | trim }}"
+    FORGEJO_RUNNER_TOKEN: "{{ (_devops | regex_search('FORGEJO_RUNNER_TOKEN=(.*)', '\\1') | default([''], true) | first) | trim }}"
+  no_log: true
+
+- name: Deploy .env merged from global + devops SOPS
+  ansible.builtin.copy:
+    content: |
+      {{ lookup('community.sops.sops', playbook_dir + '/../../secrets/global.sops.env') }}
+      {{ lookup('community.sops.sops', playbook_dir + '/../../secrets/devops.sops.env') }}
+    dest: /var/services/devops/.env
+    mode: "0600"
+    owner: root
+    group: root
+  no_log: true
+
+- name: Deploy compose.yml
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: /var/services/devops/compose.yml
+    mode: "0644"
+  notify: Restart devops
+
+- name: Deploy runner config.yaml
+  ansible.builtin.template:
+    src: runner-config.yaml.j2
+    dest: /var/services/devops/data/forgejo-runner/config.yaml
+    mode: "0640"
+    owner: "{{ PUID }}"
+    group: "{{ PGID }}"
+  no_log: true
+  notify: Restart devops
+
+- name: Deploy Caddy fragments to control-core
+  ansible.builtin.template:
+    src: "{{ item }}.conf.j2"
+    dest: "/var/services/core/caddy.d/{{ item }}.conf"
+    mode: "0644"
+  loop:
+    - code
+    - git
+    - termix
+  delegate_to: control-core
+  notify: Reload Caddy
+
+- name: Ensure devops stack up
+  community.docker.docker_compose_v2:
+    project_src: /var/services/devops
+    pull: always
+    state: present
+    remove_orphans: true

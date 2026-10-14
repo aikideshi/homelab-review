@@ -1,0 +1,1 @@
+deb [arch={{ ansible_facts['architecture'] | default('amd64') }} signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian {{ ansible_facts['distribution_release'] | default('bookworm') }} stable

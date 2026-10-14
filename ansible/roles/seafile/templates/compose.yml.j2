@@ -1,0 +1,44 @@
+services:
+  db:
+    image: mariadb:10.11.8
+    container_name: seafile-mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=${SEAFILE_MYSQL_ROOT_PASSWORD}
+      - MYSQL_LOG_CONSOLE=true
+    volumes:
+      - ${SEAFILE_MYSQL_VOLUME:-/mnt/seafile-mysql}:/var/lib/mysql
+    networks:
+      - seafile-net
+
+  memcached:
+    image: memcached:1.6.29
+    container_name: seafile-memcached
+    networks:
+      - seafile-net
+
+  seafile:
+    image: seafileltd/seafile-pro-mc:12.0.14
+    container_name: seafile
+    environment:
+      - DB_HOST=${SEAFILE_MYSQL_DB_HOST:-db}
+      - DB_ROOT_PASSWD=${SEAFILE_MYSQL_ROOT_PASSWORD}
+      - DB_USER=${SEAFILE_MYSQL_DB_USER:-seafile}
+      - DB_PASSWORD=${SEAFILE_MYSQL_DB_PASSWORD}
+      - SEAFILE_ADMIN_EMAIL=${SEAFILE_ADMIN_EMAIL}
+      - SEAFILE_ADMIN_PASSWORD=${SEAFILE_ADMIN_PASSWORD}
+      - SEAFILE_SERVER_HOSTNAME=${SEAFILE_SERVER_HOSTNAME:-seafile.h-and-i.com}
+      - SEAFILE_SERVER_PROTOCOL=https
+      - TIME_ZONE=Australia/Sydney
+      - JWT_PRIVATE_KEY=${JWT_PRIVATE_KEY}
+    volumes:
+      - ${SEAFILE_VOLUME:-/mnt/seafile-data}:/shared
+    depends_on:
+      - db
+      - memcached
+    networks:
+      - seafile-net
+    ports:
+      - "8000:80"
+
+networks:
+  seafile-net:

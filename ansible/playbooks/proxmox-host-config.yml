@@ -1,0 +1,7 @@
+- name: Configure LXC idmap
+  hosts: pve_nodes
+  become: true
+  vars:
+    lxc_vmid: "{{ lxc_vmid }}"
+  roles:
+    - pve-lxc

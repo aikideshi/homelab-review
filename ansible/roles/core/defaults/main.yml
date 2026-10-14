@@ -1,0 +1,7 @@
+---
+service_name: core
+service_root: /var/services/core
+
+# You don't NEED this file, but it's good practice
+# It gives defaults so role works even if playbook doesn't pass vars
+# Keep it simple - no core_domains loop yet if you're not comfortable

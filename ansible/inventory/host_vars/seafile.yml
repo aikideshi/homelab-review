@@ -1,0 +1,5 @@
+service_name: 161-seafile
+service_root: /var/services/161-seafile
+seafile_hostname: seafile.h-and-i.com
+seafile_protocol: https
+time_zone: Australia/Sydney

@@ -1,0 +1,26 @@
+---
+- name: Reload Caddy
+  block:
+    - name: Wait for caddy to be running
+      community.docker.docker_container_info:
+        name: caddy
+      register: caddy_info
+      until: caddy_info.exists and caddy_info.container.State.Status == "running"
+      retries: 15
+      delay: 2
+      changed_when: false
+
+    - name: Reload Caddy config
+      community.docker.docker_container_exec:
+        container: caddy
+        command: caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+      register: reload_result
+      changed_when: reload_result.rc == 0
+
+  rescue:
+    - name: Fallback - restart caddy if reload failed
+      community.docker.docker_container:
+        name: caddy
+        state: started
+        restart: true
+      changed_when: true
